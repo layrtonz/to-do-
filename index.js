@@ -1,69 +1,95 @@
+// index.js
 const express = require("express");
+const pool = require("./db"); // nossa conexão com o PostgreSQL
 
 const app = express();
 
+// Permite receber JSON no corpo das requisições
 app.use(express.json());
 
-let tasks = [];
-let nextId = 1;
-
+// Rota de saúde
 app.get("/", (req, res) => {
-  res.send("API Funcionando!!!")
+  res.send("API Task Manager + PostgreSQL 🚀");
 });
 
-app.listen(3000, () => {
-  console.log("Servidor rodando em http://localhost:3000/")
-})
+// LISTAR tarefas
+app.get("/tasks", async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM tasks ORDER BY id");
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao listar tarefas" });
+  }
+});
 
-app.post("/tasks", (req, res) => {
-  const { title } = req.body;
+// CRIAR tarefa
+app.post("/tasks", async (req, res) => {
+  const { title, done } = req.body;
 
   if (!title) {
-    return res.status(400).json({ error: "O campo 'title' é obrigatório"});
+    return res.status(400).json({ error: "O campo 'title' é obrigatório" });
   }
 
-  const task = {
-      id: nextId++,
-      title,
-      done: false
-
-  };
-
-    tasks.push(task);
-    res.status(201).json(task)
-
-})
-
-app.get("/tasks", (req, res) => {
-  res.json(tasks);
-})
-
-app.put("/tasks/:id", (req, res) => {
-  const {id} = req.params
-  const {title, done} = req.body;
-  
-  const task = tasks.find(t => t.id === parseInt(id));
-
-  if(!task) {
-    return res.status(400).json({error: "Tarefa não encontrada"});
+  try {
+    // COALESCE($2,false) => se 'done' não vier, usa false
+    const { rows } = await pool.query(
+      "INSERT INTO tasks (title, done) VALUES ($1, COALESCE($2, false)) RETURNING *",
+      [title, done]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao criar tarefa" });
   }
+});
 
-  if (title !== undefined) task.title = title;
-  if (done !== undefined) task.done = Boolean(done);
+// ATUALIZAR tarefa (parcial: title e/ou done)
+app.put("/tasks/:id", async (req, res) => {
+  const { id } = req.params;
+  const { title, done } = req.body;
 
-  res.json(task)
-})
+  try {
+    // COALESCE mantém o valor atual se não enviar o campo
+    const { rows } = await pool.query(
+      "UPDATE tasks SET title = COALESCE($1, title), done = COALESCE($2, done) WHERE id = $3 RETURNING *",
+      [title, done, id]
+    );
 
-app.delete("/tasks/:id", (req, res) => {
-  const {id} = req.params;
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Tarefa não encontrada" });
+    }
 
-  const index = tasks.findIndex(t => t.id === parseInt(id))
-
-  if ( index === -1) {
-    return res.status(404).json({ error: "Tarefa não encontrada"});
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao atualizar tarefa" });
   }
+});
 
-  const deleteTask = tasks.splice(index, 1);
+// DELETAR tarefa
+app.delete("/tasks/:id", async (req, res) => {
+  const { id } = req.params;
 
-  res.json(deleteTask[0])
-})
+  try {
+    const { rows } = await pool.query(
+      "DELETE FROM tasks WHERE id = $1 RETURNING *",
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Tarefa não encontrada" });
+    }
+
+    // retorno a tarefa removida só pra confirmação
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao deletar tarefa" });
+  }
+});
+
+// Sobe o servidor
+app.listen(3000, () => {
+  console.log("Servidor rodando em http://localhost:3000");
+});
